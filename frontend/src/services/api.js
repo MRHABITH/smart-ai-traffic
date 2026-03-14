@@ -51,8 +51,8 @@ export const detectVehicles = async (formData) => {
     logger.group('Vehicle Detection');
     logger.time('Detection Request');
 
-    // The remote Hugging Face backend uses @app.post("/analyze")
-    const response = await apiClient.post('/analyze', formData, {
+    // The Hugging Face backend uses @app.post("/api/detect")
+    const response = await apiClient.post('/api/detect', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
 
