@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import io
 import urllib.request
-from typing import List, Optional
+from typing import List, Optional, Union
 from ultralytics import YOLO
 
 # Setup logging
@@ -18,20 +18,18 @@ def download_weights(model_path):
     """Download YOLOv10 weights if they don't exist"""
     if not os.path.exists(model_path):
         logger.info(f"Downloading {model_path}...")
-        # Official YOLOv10 weights from THU-MIG GitHub
         url = f"https://github.com/THU-MIG/yolov10/releases/download/v1.1/{model_path}"
         try:
             urllib.request.urlretrieve(url, model_path)
             logger.info(f"✓ {model_path} downloaded successfully")
         except Exception as e:
             logger.error(f"Failed to download weights from Github: {e}")
-            # Ultralytics native download will be the last resort
             pass
 
 app = FastAPI(
     title="Traffic Detection API - YOLOv10",
     description="Real-time vehicle detection using YOLOv10",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 # Add CORS middleware
@@ -50,10 +48,7 @@ logger.info("Initializing YOLOv10 model...")
 try:
     model_size = os.getenv("YOLO_MODEL_SIZE", "x")
     model_file = f'yolov10{model_size}.pt'
-    
-    # Pre-emptively download
     download_weights(model_file)
-    
     model = YOLO(model_file)
     logger.info(f"✓ YOLOv10-{model_size} model loaded successfully")
 except Exception as e:
@@ -66,7 +61,6 @@ except Exception as e:
         logger.error(f"CRITICAL: All model loading failed: {fe}")
         raise
 
-# Vehicle types to detect (COCO classes)
 VEHICLE_TYPES = ["car", "bus", "motorbike", "truck", "bicycle", "person"]
 
 def process_image(image_data):
@@ -74,13 +68,10 @@ def process_image(image_data):
     try:
         img_array = np.frombuffer(image_data, np.uint8)
         image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        
         if image is None:
             raise ValueError("Failed to decode image")
         
-        # Run YOLOv10 inference
         results = model(image, conf=0.25, verbose=False)
-        
         vehicle_detections = []
         confidences = []
         detected_count = 0
@@ -108,42 +99,28 @@ def process_image(image_data):
 
 @app.get("/")
 async def root():
-    return {
-        "message": "Traffic Detection API is running",
-        "model": "YOLOv10",
-        "version": "2.0.0"
-    }
+    return {"message": "Traffic Detection API is running", "model": "YOLOv10", "version": "2.1.0"}
 
 @app.post("/api/detect")
 async def detect_vehicles(
-    files: Optional[List[UploadFile]] = File(None),
-    image_1: Optional[UploadFile] = File(None),
-    image_2: Optional[UploadFile] = File(None),
-    image_3: Optional[UploadFile] = File(None),
-    image_4: Optional[UploadFile] = File(None),
-    roads: Optional[List[str]] = Form(None)
+    files: List[UploadFile] = File(...),
+    roads: List[str] = Form(...)
 ):
+    """
+    Robust vehicle detection accepting list of files and road names.
+    Using List[...] = File(...) / Form(...) is the standard way for multiple values.
+    """
     try:
-        # Consolidate all images
-        input_images = []
-        if files:
-            input_images.extend(files)
-        if image_1: input_images.append(image_1)
-        if image_2: input_images.append(image_2)
-        if image_3: input_images.append(image_3)
-        if image_4: input_images.append(image_4)
-
-        if not input_images:
-            logger.warning("No images received in request")
-            raise HTTPException(status_code=400, detail="No valid images provided")
+        if not files:
+            raise HTTPException(status_code=400, detail="No files uploaded")
 
         detections = []
-        for idx, image_file in enumerate(input_images):
+        for idx, image_file in enumerate(files):
             try:
                 image_data = await image_file.read()
                 result = process_image(image_data)
                 
-                # Assign road label if provided
+                # Assign road label
                 if roads and idx < len(roads):
                     result["road_name"] = roads[idx]
                 else:
@@ -152,7 +129,7 @@ async def detect_vehicles(
                 detections.append(result)
                 logger.info(f"Processed image {idx+1}: {result['count']} vehicles")
             except Exception as ve:
-                logger.warning(f"Skipping image {idx+1} due to error: {ve}")
+                logger.warning(f"Error processing image {idx+1}: {ve}")
         
         if not detections:
             raise HTTPException(status_code=400, detail="Failed to process any images")
@@ -163,8 +140,6 @@ async def detect_vehicles(
             "total_vehicles": sum(d["count"] for d in detections),
             "model": "YOLOv10"
         }
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Detection error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
