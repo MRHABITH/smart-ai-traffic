@@ -63,10 +63,24 @@ export const detectVehicles = async (formData) => {
     return response.data;
   } catch (error) {
     logger.error('Vehicle Detection Failed:', error);
-    const errorMessage =
-      error.response?.data?.detail ||
-      error.message ||
-      'Detection failed. Please check the backend is running.';
+    
+    // Safely extract error message
+    let errorMessage = 'Detection failed. Please check the backend is running.';
+    
+    if (error.response?.data?.detail) {
+      const detail = error.response.data.detail;
+      if (typeof detail === 'string') {
+        errorMessage = detail;
+      } else if (Array.isArray(detail)) {
+        // Handle Pydantic validation errors: {type, loc, msg, input, url}
+        errorMessage = detail.map(d => `${d.loc?.join('.') || 'Error'}: ${d.msg || 'Invalid input'}`).join('; ');
+      } else if (typeof detail === 'object') {
+        errorMessage = JSON.stringify(detail);
+      }
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+
     throw { message: errorMessage, status: error.response?.status, originalError: error };
   }
 };
